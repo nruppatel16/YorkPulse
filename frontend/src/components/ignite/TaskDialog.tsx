@@ -9,9 +9,10 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { AssigneePicker } from "./AssigneePicker";
-import { useIgniteMembers, useTaskMutations } from "./hooks";
+import { useIgniteMembers, useIgniteProjects, useIgniteTasks, useTaskMutations } from "./hooks";
 import { ProgressBar } from "./ProgressBar";
 import { IGNITE_TEAMS, teamLabel, type TeamSlug } from "./teams";
+import { WaitingOnPicker } from "./WaitingOnPicker";
 import { PRIORITIES, STATUSES, statusMeta, type IgniteTask, type TaskPriority, type TaskStatus } from "./types";
 
 interface TaskDialogProps {
@@ -19,6 +20,7 @@ interface TaskDialogProps {
   onOpenChange: (open: boolean) => void;
   task?: IgniteTask | null; // edit mode when set
   defaultTeam?: TeamSlug;
+  defaultProjectId?: string;
 }
 
 export function TaskDialog(props: TaskDialogProps) {
@@ -36,11 +38,15 @@ export function TaskDialog(props: TaskDialogProps) {
   );
 }
 
-function TaskForm({ onOpenChange, task, defaultTeam }: TaskDialogProps) {
+function TaskForm({ onOpenChange, task, defaultTeam, defaultProjectId }: TaskDialogProps) {
   const { data: members = [] } = useIgniteMembers();
+  const { data: projects = [] } = useIgniteProjects();
+  const { data: allTasks = [] } = useIgniteTasks();
   const { create, update, remove } = useTaskMutations();
 
   const [title, setTitle] = useState(task?.title ?? "");
+  const [projectId, setProjectId] = useState(task?.project_id ?? defaultProjectId ?? "");
+  const [dependsOnIds, setDependsOnIds] = useState<string[]>(task?.depends_on_ids ?? []);
   const [description, setDescription] = useState(task?.description ?? "");
   const [team, setTeam] = useState<TeamSlug>(task?.team ?? defaultTeam ?? "marketing");
   const [status, setStatus] = useState<TaskStatus>(task?.status ?? "not_started");
@@ -73,8 +79,9 @@ function TaskForm({ onOpenChange, task, defaultTeam }: TaskDialogProps) {
   const actor = members.find((m) => m.id === actorId);
 
   // Every field is required (the backend enforces this too)
-  const errors: Partial<Record<"title" | "description" | "dueDate" | "assignees" | "actor", string>> = {};
+  const errors: Partial<Record<"title" | "project" | "description" | "dueDate" | "assignees" | "actor", string>> = {};
   if (!title.trim()) errors.title = "Add a title";
+  if (!projectId) errors.project = "Pick a project";
   if (!description.trim()) errors.description = "Add some details";
   if (!dueDate) errors.dueDate = "Pick a due date";
   if (assigneeIds.length === 0) errors.assignees = "Assign at least one person";
@@ -90,6 +97,8 @@ function TaskForm({ onOpenChange, task, defaultTeam }: TaskDialogProps) {
     }
     const data = {
       title,
+      project_id: projectId,
+      depends_on_ids: dependsOnIds,
       description,
       team,
       status,
@@ -132,6 +141,22 @@ function TaskForm({ onOpenChange, task, defaultTeam }: TaskDialogProps) {
         <Label htmlFor="task-title">Title</Label>
         <Input id="task-title" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} autoFocus={!task} />
         {err("title")}
+      </div>
+
+      <div className="space-y-1.5">
+        <Label>Project / workshop</Label>
+        <Select value={projectId} onValueChange={setProjectId}>
+          <SelectTrigger className="w-full"><SelectValue placeholder="Select a project" /></SelectTrigger>
+          <SelectContent>
+            {projects
+              // archived projects take no new tasks, but a task already in one keeps it
+              .filter((p) => p.status === "active" || p.id === task?.project_id)
+              .map((p) => (
+                <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+              ))}
+          </SelectContent>
+        </Select>
+        {err("project")}
       </div>
 
       <div className="space-y-1.5">
@@ -207,6 +232,18 @@ function TaskForm({ onOpenChange, task, defaultTeam }: TaskDialogProps) {
           <AssigneePicker members={selectable} team={team} selected={assigneeIds} onChange={setAssigneeIds} />
         )}
         {err("assignees")}
+      </div>
+
+      <div className="space-y-1.5">
+        <Label>Waiting on <span className="font-normal text-gray-400">(optional)</span></Label>
+        <p className="text-xs text-gray-500">Tasks, often someone else&apos;s, that need to be done before this one can finish.</p>
+        <WaitingOnPicker
+          tasks={allTasks}
+          projects={projects}
+          taskId={task?.id}
+          selected={dependsOnIds}
+          onChange={setDependsOnIds}
+        />
       </div>
 
       <div className="space-y-1.5">

@@ -1,11 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useIgniteTasks } from "./hooks";
+import { useIgniteTasks, useTaskIndex } from "./hooks";
 import { ProgressBar } from "./ProgressBar";
 import { TaskBoard } from "./TaskBoard";
 import { IGNITE_TEAMS, teamLabel } from "./teams";
-import { isOverdue, type IgniteTask } from "./types";
+import { isOverdue, isWaiting, type IgniteTask } from "./types";
 
 function summarize(tasks: IgniteTask[]) {
   const done = tasks.filter((t) => t.status === "done").length;
@@ -22,12 +22,15 @@ function summarize(tasks: IgniteTask[]) {
 
 export function Overview() {
   const { data: tasks = [] } = useIgniteTasks();
+  const byId = useTaskIndex(tasks);
   const all = summarize(tasks);
+  const waiting = tasks.filter((t) => isWaiting(t, byId)).length;
 
   const tiles = [
     { label: "Open tasks", value: all.total - all.done },
     { label: "In progress", value: all.inProgress },
     { label: "Blocked", value: all.blocked, alert: all.blocked > 0 },
+    { label: "Waiting on others", value: waiting, alert: waiting > 0 },
     { label: "Overdue", value: all.overdue, alert: all.overdue > 0 },
     { label: "Finished", value: all.done },
   ];
@@ -36,7 +39,7 @@ export function Overview() {
     <div className="mx-auto max-w-7xl px-4 py-8">
       <h1 className="text-2xl font-bold text-gray-900">Club overview</h1>
 
-      <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-5">
+      <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         {tiles.map((t) => (
           <div key={t.label} className="rounded-lg border border-gray-200 p-4">
             <p className="text-xs text-gray-500">{t.label}</p>

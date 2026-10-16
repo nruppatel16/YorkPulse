@@ -19,9 +19,27 @@ export interface MemberInput {
   is_active?: boolean;
 }
 
+export interface IgniteProject {
+  id: string;
+  name: string;
+  description: string | null;
+  status: "active" | "archived";
+  created_by: string | null;
+  created_at: string;
+}
+
+export interface ProjectInput {
+  name?: string;
+  description?: string | null;
+  status?: "active" | "archived";
+  actor?: string; // required when creating
+}
+
 export interface IgniteTask {
   id: string;
   title: string;
+  project_id: string;
+  depends_on_ids: string[]; // tasks this one is waiting on
   description: string | null;
   team: TeamSlug;
   status: TaskStatus;
@@ -37,6 +55,8 @@ export interface IgniteTask {
 
 export interface TaskInput {
   title?: string;
+  project_id?: string;
+  depends_on_ids?: string[];
   description?: string | null;
   team?: TeamSlug;
   status?: TaskStatus;
@@ -81,4 +101,15 @@ export function isOverdue(task: IgniteTask): boolean {
 export function formatDue(due: string): string {
   const [y, m, d] = due.split("-").map(Number);
   return new Date(y, m - 1, d).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+// The unfinished tasks this one is waiting on (empty once they're all done)
+export function openBlockers(task: IgniteTask, byId: Map<string, IgniteTask>): IgniteTask[] {
+  return task.depends_on_ids
+    .map((id) => byId.get(id))
+    .filter((t): t is IgniteTask => !!t && t.status !== "done");
+}
+
+export function isWaiting(task: IgniteTask, byId: Map<string, IgniteTask>): boolean {
+  return task.status !== "done" && openBlockers(task, byId).length > 0;
 }

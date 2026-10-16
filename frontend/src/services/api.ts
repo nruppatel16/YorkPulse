@@ -1,4 +1,4 @@
-import type { IgniteMember, IgniteTask, MemberInput, TaskInput } from "@/components/ignite/types";
+import type { IgniteMember, IgniteProject, IgniteTask, MemberInput, ProjectInput, TaskInput } from "@/components/ignite/types";
 import type {
   User,
   VaultPost,
@@ -1253,6 +1253,9 @@ class ApiClient {
     createMember: (data: MemberInput) => this.post<IgniteMember>("/ignite/members", data),
     updateMember: (id: string, data: MemberInput) =>
       this.patch<IgniteMember>(`/ignite/members/${id}`, data),
+    listProjects: () => this.get<IgniteProject[]>("/ignite/projects"),
+    createProject: (data: ProjectInput) => this.post<IgniteProject>("/ignite/projects", data),
+    updateProject: (id: string, data: ProjectInput) => this.patch<IgniteProject>(`/ignite/projects/${id}`, data),
     listTasks: () => this.get<IgniteTask[]>("/ignite/tasks"),
     createTask: (data: TaskInput) => this.post<IgniteTask>("/ignite/tasks", data),
     updateTask: (id: string, data: TaskInput) => this.patch<IgniteTask>(`/ignite/tasks/${id}`, data),

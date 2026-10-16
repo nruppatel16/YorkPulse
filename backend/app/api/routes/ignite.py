@@ -16,7 +16,13 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.passwords import verify_pbkdf2
 from app.core.dependencies import CurrentUser, is_sandbox_user
-from app.models.ignite import IgniteMember, IgniteTask, ignite_task_assignees
+from app.models.ignite import (
+    IgniteMember,
+    IgniteProject,
+    IgniteTask,
+    ignite_task_assignees,
+    ignite_task_dependencies,
+)
 from app.models.user import User
 from app.services.redis import redis_service
 from app.schemas.ignite import (
@@ -24,6 +30,9 @@ from app.schemas.ignite import (
     MemberResponse,
     MemberUpdate,
     PasscodeRequest,
+    ProjectCreate,
+    ProjectResponse,
+    ProjectUpdate,
     Priority,
     Status,
     TaskCreate,
@@ -59,7 +68,9 @@ def _task_out(t: IgniteTask) -> TaskResponse:
         progress=t.progress,
         priority=t.priority,
         due_date=t.due_date,
+        project_id=str(t.project_id),
         assignees=[_member_out(m) for m in t.assignees],
+        depends_on_ids=[str(d.id) for d in t.depends_on],
         created_by=t.created_by,
         updated_by=t.updated_by,
         created_at=t.created_at,
@@ -82,6 +93,58 @@ async def _load_members(db: AsyncSession, ids: list[str]) -> list[IgniteMember]:
     if len(members) != len(uuids):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown assignee")
     return list(members)
+
+
+def _project_out(p: IgniteProject) -> ProjectResponse:
+    return ProjectResponse(
+        id=str(p.id),
+        name=p.name,
+        description=p.description,
+        status=p.status,
+        created_by=p.created_by,
+        created_at=p.created_at,
+    )
+
+
+async def _load_project(db: AsyncSession, project_id: str, *, require_active: bool) -> IgniteProject:
+    project = await db.get(IgniteProject, _parse_uuid(project_id, "Project"))
+    if not project:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown project")
+    if require_active and project.status != "active":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="That project is archived")
+    return project
+
+
+async def _load_dependencies(db: AsyncSession, ids: list[str], task_id: uuid.UUID | None) -> list[IgniteTask]:
+    """Resolve "waiting on" task ids, rejecting self-links and cycles
+    (A waits on B while B, directly or through others, waits on A)."""
+    uuids = list({_parse_uuid(i, "Task") for i in ids})
+    if not uuids:
+        return []
+    if task_id is not None and task_id in uuids:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="A task can't wait on itself")
+    deps = (await db.execute(select(IgniteTask).where(IgniteTask.id.in_(uuids)))).scalars().all()
+    if len(deps) != len(uuids):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown task in 'waiting on'")
+
+    if task_id is not None:
+        # A brand-new task has nothing waiting on it yet, so only edits can close a loop
+        edges: dict[uuid.UUID, list[uuid.UUID]] = {}
+        for row in (await db.execute(select(ignite_task_dependencies))).all():
+            edges.setdefault(row.task_id, []).append(row.depends_on_id)
+        stack, seen = list(uuids), set()
+        while stack:
+            current = stack.pop()
+            if current == task_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="That would create a loop: one of those tasks is already waiting on this one",
+                )
+            if current in seen:
+                continue
+            seen.add(current)
+            stack.extend(edges.get(current, []))
+    return list(deps)
 
 
 def _sync_status_progress(task: IgniteTask, status_set: bool, progress_set: bool) -> None:
@@ -182,6 +245,38 @@ async def update_member(member_id: str, body: MemberUpdate, _: IgniteUser, db: D
     return _member_out(member)
 
 
+# ---- Projects ---------------------------------------------------------------
+
+
+@router.get("/projects", response_model=list[ProjectResponse])
+async def list_projects(_: IgniteUser, db: DB):
+    q = select(IgniteProject).order_by(IgniteProject.status, IgniteProject.created_at)
+    return [_project_out(p) for p in (await db.execute(q)).scalars().all()]
+
+
+@router.post("/projects", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
+async def create_project(body: ProjectCreate, _: IgniteUser, db: DB):
+    project = IgniteProject(name=body.name, description=body.description, created_by=body.actor)
+    db.add(project)
+    await db.commit()
+    await db.refresh(project)
+    return _project_out(project)
+
+
+@router.patch("/projects/{project_id}", response_model=ProjectResponse)
+async def update_project(project_id: str, body: ProjectUpdate, _: IgniteUser, db: DB):
+    project = await db.get(IgniteProject, _parse_uuid(project_id, "Project"))
+    if not project:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    for field, value in body.model_dump(exclude_unset=True).items():
+        # description can be cleared; name and status can't be null
+        if value is not None or field == "description":
+            setattr(project, field, value)
+    await db.commit()
+    await db.refresh(project)
+    return _project_out(project)
+
+
 # ---- Tasks ------------------------------------------------------------------
 
 
@@ -193,6 +288,7 @@ async def list_tasks(
     status_: Annotated[Status | None, Query(alias="status")] = None,
     priority: Priority | None = None,
     assignee_id: str | None = None,
+    project_id: str | None = None,
 ):
     q = select(IgniteTask).order_by(IgniteTask.due_date.asc().nulls_last(), IgniteTask.created_at.desc())
     if team:
@@ -201,6 +297,8 @@ async def list_tasks(
         q = q.where(IgniteTask.status == status_)
     if priority:
         q = q.where(IgniteTask.priority == priority)
+    if project_id:
+        q = q.where(IgniteTask.project_id == _parse_uuid(project_id, "Project"))
     if assignee_id:
         q = q.join(ignite_task_assignees).where(
             ignite_task_assignees.c.member_id == _parse_uuid(assignee_id, "Member")
@@ -210,7 +308,9 @@ async def list_tasks(
 
 @router.post("/tasks", response_model=TaskResponse, status_code=status.HTTP_201_CREATED)
 async def create_task(body: TaskCreate, _: IgniteUser, db: DB):
+    project = await _load_project(db, body.project_id, require_active=True)
     task = IgniteTask(
+        project_id=project.id,
         title=body.title,
         description=body.description,
         team=body.team,
@@ -222,6 +322,7 @@ async def create_task(body: TaskCreate, _: IgniteUser, db: DB):
         updated_by=body.actor,
     )
     task.assignees = await _load_members(db, body.assignee_ids)
+    task.depends_on = await _load_dependencies(db, body.depends_on_ids, task_id=None)
     # the form always sends both; an explicit Finished/Not started wins
     _sync_status_progress(task, status_set=body.status in ("done", "not_started"), progress_set=True)
     db.add(task)
@@ -235,11 +336,18 @@ async def update_task(task_id: str, body: TaskUpdate, _: IgniteUser, db: DB):
     data = body.model_dump(exclude_unset=True)
     actor = data.pop("actor", None)
     assignee_ids = data.pop("assignee_ids", None)
+    depends_on_ids = data.pop("depends_on_ids", None)
+    project_id = data.pop("project_id", None)
 
     for field, value in data.items():
         setattr(task, field, value)
     if assignee_ids is not None:
         task.assignees = await _load_members(db, assignee_ids)
+    if depends_on_ids is not None:
+        task.depends_on = await _load_dependencies(db, depends_on_ids, task_id=task.id)
+    if project_id is not None and _parse_uuid(project_id, "Project") != task.project_id:
+        # moving a task needs an active project; keeping it where it is doesn't
+        task.project_id = (await _load_project(db, project_id, require_active=True)).id
 
     _sync_status_progress(
         task,

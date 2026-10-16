@@ -6,25 +6,40 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { useIgniteMembers, useIgniteTasks } from "./hooks";
+import { useIgniteMembers, useIgniteProjects, useIgniteTasks, useTaskIndex } from "./hooks";
 import { TaskCard } from "./TaskCard";
 import { TaskDialog } from "./TaskDialog";
 import { IGNITE_TEAMS, teamLabel, type TeamSlug } from "./teams";
-import { isOverdue, PRIORITIES, STATUSES, type IgniteTask } from "./types";
+import { isOverdue, isWaiting, PRIORITIES, STATUSES, type IgniteTask } from "./types";
 
 const ALL = "all";
 
-// Kanban board of tasks by status. With `team` it shows that team only;
-// without it, it's the club-wide view with a team filter.
-export function TaskBoard({ team }: { team?: TeamSlug }) {
+// Kanban board of tasks by status. `team` or `project` pins the board to one
+// team or one project; without either it's the club-wide view with filters.
+export function TaskBoard({ team, project }: { team?: TeamSlug; project?: string }) {
   const { data: tasks = [], isLoading, isError } = useIgniteTasks();
   const { data: members = [] } = useIgniteMembers();
+  const { data: projects = [] } = useIgniteProjects();
+  const byId = useTaskIndex(tasks);
+
+  // How many unfinished tasks are waiting on each task
+  const blockingCount = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const t of tasks) {
+      if (t.status === "done") continue;
+      for (const id of t.depends_on_ids) counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
+    return counts;
+  }, [tasks]);
+  const projectName = (id: string) => projects.find((p) => p.id === id)?.name;
 
   const [search, setSearch] = useState("");
   const [teamFilter, setTeamFilter] = useState<string>(ALL);
   const [assignee, setAssignee] = useState<string>(ALL);
   const [priority, setPriority] = useState<string>(ALL);
+  const [projectFilter, setProjectFilter] = useState<string>(ALL);
   const [overdueOnly, setOverdueOnly] = useState(false);
+  const [waitingOnly, setWaitingOnly] = useState(false);
   const [dialog, setDialog] = useState<{ open: boolean; task: IgniteTask | null }>({ open: false, task: null });
 
   const visible = useMemo(() => {
@@ -32,13 +47,16 @@ export function TaskBoard({ team }: { team?: TeamSlug }) {
     return tasks.filter((t) => {
       if (team && t.team !== team) return false;
       if (!team && teamFilter !== ALL && t.team !== teamFilter) return false;
+      if (project && t.project_id !== project) return false;
+      if (!project && projectFilter !== ALL && t.project_id !== projectFilter) return false;
       if (assignee !== ALL && !t.assignees.some((m) => m.id === assignee)) return false;
       if (priority !== ALL && t.priority !== priority) return false;
       if (overdueOnly && !isOverdue(t)) return false;
+      if (waitingOnly && !isWaiting(t, byId)) return false;
       if (q && !`${t.title} ${t.description ?? ""}`.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [tasks, team, teamFilter, assignee, priority, overdueOnly, search]);
+  }, [tasks, team, teamFilter, project, projectFilter, assignee, priority, overdueOnly, waitingOnly, byId, search]);
 
   const activeMembers = members.filter((m) => m.is_active);
 
@@ -57,6 +75,19 @@ export function TaskBoard({ team }: { team?: TeamSlug }) {
               {IGNITE_TEAMS.map((t) => (
                 <SelectItem key={t.slug} value={t.slug}>{teamLabel(t.slug)}</SelectItem>
               ))}
+            </SelectContent>
+          </Select>
+        )}
+        {!project && (
+          <Select value={projectFilter} onValueChange={setProjectFilter}>
+            <SelectTrigger className="w-[180px]"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL}>All projects</SelectItem>
+              {projects
+                .filter((p) => p.status === "active")
+                .map((p) => (
+                  <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                ))}
             </SelectContent>
           </Select>
         )}
@@ -87,6 +118,15 @@ export function TaskBoard({ team }: { team?: TeamSlug }) {
         >
           Overdue only
         </button>
+        <button
+          onClick={() => setWaitingOnly((v) => !v)}
+          className={cn(
+            "h-9 rounded-md border px-3 text-sm transition-colors",
+            waitingOnly ? "border-amber-300 bg-amber-50 text-amber-800" : "border-gray-200 text-gray-600 hover:bg-gray-50"
+          )}
+        >
+          Waiting on others
+        </button>
         <Button onClick={() => setDialog({ open: true, task: null })} className="ml-auto bg-gray-900 text-white hover:bg-gray-800">
           <Plus className="mr-1 h-4 w-4" />
           New task
@@ -113,7 +153,15 @@ export function TaskBoard({ team }: { team?: TeamSlug }) {
                     <p className="py-4 text-center text-xs text-gray-400">No tasks</p>
                   ) : (
                     column.map((t) => (
-                      <TaskCard key={t.id} task={t} showTeam={!team} onOpen={() => setDialog({ open: true, task: t })} />
+                      <TaskCard
+                        key={t.id}
+                        task={t}
+                        byId={byId}
+                        blockingCount={blockingCount.get(t.id) ?? 0}
+                        projectName={project ? undefined : projectName(t.project_id)}
+                        showTeam={!team}
+                        onOpen={() => setDialog({ open: true, task: t })}
+                      />
                     ))
                   )}
                 </div>
@@ -128,6 +176,7 @@ export function TaskBoard({ team }: { team?: TeamSlug }) {
         onOpenChange={(open) => setDialog((d) => ({ ...d, open }))}
         task={dialog.task}
         defaultTeam={team ?? (teamFilter !== ALL ? (teamFilter as TeamSlug) : undefined)}
+        defaultProjectId={project ?? (projectFilter !== ALL ? projectFilter : undefined)}
       />
     </div>
   );

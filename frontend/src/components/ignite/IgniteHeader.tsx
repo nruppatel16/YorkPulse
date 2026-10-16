@@ -9,6 +9,7 @@ import { IGNITE_TEAMS, teamLabel } from "./teams";
 
 const NAV = [
   { href: "/ignite", label: "Overview", exact: true },
+  { href: "/ignite/projects", label: "Projects", exact: false },
   ...IGNITE_TEAMS.map((t) => ({ href: t.href, label: teamLabel(t.slug), exact: false })),
   { href: "/ignite/members", label: "Members", exact: false },
   { href: "/ignite/files", label: "Files", exact: false },

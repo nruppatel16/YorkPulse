@@ -50,7 +50,7 @@ from app.models.gig import (
     GigTransactionStatus,
 )
 from app.models.push_subscription import PushSubscription
-from app.models.ignite import IgniteMember, IgniteTask
+from app.models.ignite import IgniteMember, IgniteProject, IgniteTask
 
 __all__ = [
     # Base
@@ -117,5 +117,6 @@ __all__ = [
     # Push
     "PushSubscription",
     "IgniteMember",
+    "IgniteProject",
     "IgniteTask",
 ]

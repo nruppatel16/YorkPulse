@@ -1,12 +1,14 @@
 "use client";
 
+import { useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/services/api";
 import { useToast } from "@/hooks/use-toast";
-import type { MemberInput, TaskInput } from "./types";
+import type { IgniteTask, MemberInput, ProjectInput, TaskInput } from "./types";
 
 const TASKS_KEY = ["ignite", "tasks"];
 const MEMBERS_KEY = ["ignite", "members"];
+const PROJECTS_KEY = ["ignite", "projects"];
 
 // The club is small, so every view loads all tasks once and filters locally.
 // Polling keeps shared screens fresh while several members edit at once.
@@ -17,6 +19,19 @@ export function useIgniteTasks() {
     refetchInterval: 30_000,
     refetchOnWindowFocus: true,
   });
+}
+
+export function useIgniteProjects() {
+  return useQuery({
+    queryKey: PROJECTS_KEY,
+    queryFn: () => api.ignite.listProjects(),
+    refetchInterval: 60_000,
+  });
+}
+
+// Lookup table for resolving "waiting on" ids into tasks
+export function useTaskIndex(tasks: IgniteTask[]) {
+  return useMemo(() => new Map(tasks.map((t) => [t.id, t])), [tasks]);
 }
 
 export function useIgniteMembers() {
@@ -76,6 +91,20 @@ export function useMemberMutations() {
     }),
     update: useMutation({
       mutationFn: ({ id, data }: { id: string; data: MemberInput }) => api.ignite.updateMember(id, data),
+      onSuccess,
+      onError,
+    }),
+  };
+}
+
+export function useProjectMutations() {
+  const qc = useQueryClient();
+  const onError = useOnError();
+  const onSuccess = () => qc.invalidateQueries({ queryKey: PROJECTS_KEY });
+  return {
+    create: useMutation({ mutationFn: (data: ProjectInput) => api.ignite.createProject(data), onSuccess, onError }),
+    update: useMutation({
+      mutationFn: ({ id, data }: { id: string; data: ProjectInput }) => api.ignite.updateProject(id, data),
       onSuccess,
       onError,
     }),

@@ -1,13 +1,23 @@
 "use client";
 
-import { CalendarDays } from "lucide-react";
+import { CalendarDays, Hourglass, Link2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ProgressBar } from "./ProgressBar";
 import { groupLabel, teamLabel } from "./teams";
-import { formatDue, isOverdue, priorityMeta, statusMeta, type IgniteTask } from "./types";
+import { formatDue, isOverdue, openBlockers, priorityMeta, statusMeta, type IgniteTask } from "./types";
 
-export function TaskCard({ task, showTeam, onOpen }: { task: IgniteTask; showTeam?: boolean; onOpen: () => void }) {
+interface TaskCardProps {
+  task: IgniteTask;
+  byId: Map<string, IgniteTask>;
+  blockingCount: number; // unfinished tasks waiting on this one
+  projectName?: string; // shown on boards that mix projects
+  showTeam?: boolean;
+  onOpen: () => void;
+}
+
+export function TaskCard({ task, byId, blockingCount, projectName, showTeam, onOpen }: TaskCardProps) {
   const overdue = isOverdue(task);
+  const blockers = task.status === "done" ? [] : openBlockers(task, byId);
   const priority = priorityMeta(task.priority);
   const status = statusMeta(task.status);
 
@@ -24,7 +34,34 @@ export function TaskCard({ task, showTeam, onOpen }: { task: IgniteTask; showTea
           </span>
         )}
       </div>
-      {showTeam && <p className="mt-0.5 text-xs text-gray-500">{teamLabel(task.team)}</p>}
+      {(showTeam || projectName) && (
+        <p className="mt-0.5 text-xs text-gray-500">
+          {[showTeam && teamLabel(task.team), projectName].filter(Boolean).join(" · ")}
+        </p>
+      )}
+
+      {blockers.length > 0 && (
+        <div className="mt-2 rounded-md bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
+          <p className="flex items-center gap-1 font-medium">
+            <Hourglass className="h-3.5 w-3.5" />
+            Waiting on {blockers.length === 1 ? "1 task" : `${blockers.length} tasks`}
+          </p>
+          <ul className="mt-0.5 space-y-0.5">
+            {blockers.slice(0, 3).map((b) => (
+              <li key={b.id} className="truncate">
+                {b.title} <span className="text-amber-700">({b.assignees.map((m) => m.name).join(", ") || "unassigned"})</span>
+              </li>
+            ))}
+            {blockers.length > 3 && <li className="text-amber-700">+{blockers.length - 3} more</li>}
+          </ul>
+        </div>
+      )}
+      {blockingCount > 0 && task.status !== "done" && (
+        <p className="mt-2 flex items-center gap-1 text-xs font-medium text-red-700">
+          <Link2 className="h-3.5 w-3.5" />
+          Blocking {blockingCount === 1 ? "1 task" : `${blockingCount} tasks`}
+        </p>
+      )}
 
       <div className="mt-3 flex items-center gap-2">
         <ProgressBar value={task.progress} barClassName={status.bar} />
